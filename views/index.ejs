@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Y-Share - 簡単ファイル転送</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f3f5; color: #333; }
+        .hero-title { font-weight: 800; color: #ff5a5f; letter-spacing: -1px; }
+        .card { border: none; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
+        .big-code { font-size: 3rem; font-weight: bold; letter-spacing: 5px; color: #ff5a5f; }
+        .btn-custom { background-color: #ff5a5f; color: white; font-weight: bold; border-radius: 50px; padding: 10px 30px; }
+        .btn-custom:hover { background-color: #e04e53; color: white; }
+        .form-control-lg { border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container py-5">
+        <div class="text-center mb-5">
+            <h1 class="hero-title display-4">Y-Share</h1>
+            <p class="text-muted">6桁のキーで、どこへでも送信。</p>
+        </div>
+
+        <div class="row justify-content-center g-4">
+            
+            <!-- 送信エリア -->
+            <div class="col-md-5">
+                <div class="card p-4 h-100">
+                    <h3 class="mb-4">送信 <span class="text-muted fs-6">Send</span></h3>
+                    
+                    <% if (generatedCode) { %>
+                        <!-- アップロード完了後の表示 -->
+                        <div class="text-center py-4">
+                            <p class="mb-1 text-muted">このファイルを共有:</p>
+                            <p class="fw-bold"><%= filename %></p>
+                            <hr>
+                            <p class="mb-0 text-muted small">下記キーを相手に伝えてください</p>
+                            <div class="big-code my-3"><%= generatedCode %></div>
+                            <p class="text-danger small">※10分間有効です</p>
+                            <a href="/" class="btn btn-outline-secondary btn-sm mt-3">戻る</a>
+                        </div>
+                    <% } else { %>
+                        <!-- アップロードフォーム -->
+                        <form action="/send" method="POST" enctype="multipart/form-data">
+                            <div class="mb-4 py-5 border border-2 border-dashed text-center rounded bg-light" onclick="document.getElementById('fileInput').click()" style="cursor: pointer;">
+                                <span class="text-muted">＋ ファイルを選択</span>
+                                <input type="file" id="fileInput" name="file" class="d-none" onchange="this.form.submit()">
+                            </div>
+                            <p class="text-muted small text-center">クリックしてファイルを選択すると<br>アップロードが開始されます。</p>
+                        </form>
+                    <% } %>
+                </div>
+            </div>
+
+            <!-- 受信エリア -->
+            <div class="col-md-5">
+                <div class="card p-4 h-100 bg-white">
+                    <h3 class="mb-4">受信 <span class="text-muted fs-6">Receive</span></h3>
+                    
+                    <% if (error) { %>
+                        <div class="alert alert-danger"><%= error %></div>
+                    <% } %>
+
+                    <form action="/receive" method="POST">
+                        <div class="mb-3">
+                            <input type="text" name="code" class="form-control form-control-lg text-center" placeholder="キーを入力" maxlength="6" required style="letter-spacing: 3px; font-weight: bold;">
+                        </div>
+                        <div class="d-grid">
+                            <button type="submit" class="btn btn-custom btn-lg">ダウンロード</button>
+                        </div>
+                    </form>
+                    <div class="mt-4 text-center">
+                        <small class="text-muted">キーを入力してファイルを受け取ります</small>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</body>
+</html>
