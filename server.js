@@ -18,8 +18,9 @@ const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
         folder: 'y-share-temp',
-        resource_type: 'auto', 
-        public_id: (req, file) => file.originalname.split('.')[0] + '-' + Date.now(),
+        resource_type: 'auto',
+        // ↓【修正】日本語ファイル名を使わず、安全なIDを生成する
+        public_id: (req, file) => 'upload-' + Date.now(), 
     },
 });
 const upload = multer({ storage: storage });
