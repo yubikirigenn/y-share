@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
+const axios = require('axios');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
 const app = express();
@@ -79,25 +80,34 @@ app.post('/send', upload.single('file'), (req, res) => {
 });
 
 // 受信（ダウンロード）処理
-app.post('/receive', (req, res) => {
+app.post('/receive', async (req, res) => { // ← async を追加！
     const code = req.body.code;
     const fileData = fileDatabase[code];
 
     if (fileData) {
-        // 【修正2】ダウンロード時に正しい日本語ファイル名になるようにURLを加工
-        // CloudinaryのURLの "/upload/" の後ろに "fl_attachment:(ファイル名)/" を挿入する
-        
-        let downloadUrl = fileData.url;
-        
-        // ファイル名をURLエンコード（日本語対応）
-        const encodedName = encodeURIComponent(fileData.name);
-        
-        // URLを加工して「強制ダウンロード」かつ「ファイル名指定」のフラグを追加
-        // 元: .../upload/v12345/...
-        // 新: .../upload/fl_attachment:エンコードされた名前/v12345/...
-        downloadUrl = downloadUrl.replace('/upload/', `/upload/fl_attachment:${encodedName}/`);
+        try {
+            // Cloudinaryからファイルデータを取得
+            const response = await axios({
+                method: 'GET',
+                url: fileData.url,
+                responseType: 'stream' // ストリーム形式（データそのまま）で取得
+            });
 
-        res.redirect(downloadUrl);
+            // ブラウザに対して「これはダウンロードファイルですよ」と伝えるヘッダー設定
+            // 日本語ファイル名が正しく扱われる形式（RFC 5987）で指定
+            const encodedName = encodeURIComponent(fileData.name);
+            res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedName}`);
+            
+            // ファイルの種類（MIMEタイプ）を中継
+            res.setHeader('Content-Type', response.headers['content-type']);
+
+            // データをユーザーへ流し込む
+            response.data.pipe(res);
+
+        } catch (error) {
+            console.error('Download error:', error);
+            res.render('index', { generatedCode: null, error: 'ファイルの取得に失敗しました。' });
+        }
     } else {
         res.render('index', { generatedCode: null, error: '無効なコード、または期限切れです。' });
     }
