@@ -54,20 +54,27 @@ app.post('/send', upload.single('file'), (req, res) => {
 
     const code = generateCode();
 
+    // 【修正1】文字化け対策：ファイル名をUTF-8に変換して直す
+    let originalName = req.file.originalname;
+    try {
+        // Latin1(ISO-8859-1)として誤認識されたものをバイナリに戻し、UTF-8として読み直す
+        originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+    } catch (e) {
+        console.log("文字コード変換エラー:", e);
+    }
+
     // データベースに登録
     fileDatabase[code] = {
         url: req.file.path,
-        name: req.file.originalname,
+        name: originalName, // 修正済みの名前を保存
         timer: setTimeout(() => {
-            // 10分後にデータを削除（メモリ解放）
-            // ※Cloudinary上の実ファイルは残りますが、アクセス手段がなくなります
             delete fileDatabase[code];
             console.log(`Code ${code} expired.`);
-        }, 10 * 60 * 1000) // 10分
+        }, 10 * 60 * 1000)
     };
 
-    // ユーザーにコードを表示
-    res.render('index', { generatedCode: code, error: null, filename: req.file.originalname });
+    // 修正済みの名前で画面に表示
+    res.render('index', { generatedCode: code, error: null, filename: originalName });
 });
 
 // 受信（ダウンロード）処理
@@ -76,8 +83,20 @@ app.post('/receive', (req, res) => {
     const fileData = fileDatabase[code];
 
     if (fileData) {
-        // CloudinaryのURLへリダイレクトしてダウンロード開始
-        res.redirect(fileData.url);
+        // 【修正2】ダウンロード時に正しい日本語ファイル名になるようにURLを加工
+        // CloudinaryのURLの "/upload/" の後ろに "fl_attachment:(ファイル名)/" を挿入する
+        
+        let downloadUrl = fileData.url;
+        
+        // ファイル名をURLエンコード（日本語対応）
+        const encodedName = encodeURIComponent(fileData.name);
+        
+        // URLを加工して「強制ダウンロード」かつ「ファイル名指定」のフラグを追加
+        // 元: .../upload/v12345/...
+        // 新: .../upload/fl_attachment:エンコードされた名前/v12345/...
+        downloadUrl = downloadUrl.replace('/upload/', `/upload/fl_attachment:${encodedName}/`);
+
+        res.redirect(downloadUrl);
     } else {
         res.render('index', { generatedCode: null, error: '無効なコード、または期限切れです。' });
     }
