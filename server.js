@@ -2,8 +2,9 @@ require('dotenv').config();
 const express = require('express');
 const multer = require('multer');
 const cloudinary = require('cloudinary').v2;
-const axios = require('axios');
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const axios = require('axios');
+const archiver = require('archiver'); // ZIP圧縮用
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,96 +21,138 @@ const storage = new CloudinaryStorage({
     params: {
         folder: 'y-share-temp',
         resource_type: 'auto',
-        // ↓【修正】日本語ファイル名を使わず、安全なIDを生成する
-        public_id: (req, file) => 'upload-' + Date.now(), 
+        public_id: (req, file) => 'upload-' + Date.now() + '-' + Math.round(Math.random() * 1000),
     },
 });
+
+// 最大10ファイルまでアップロード可能に設定
 const upload = multer({ storage: storage });
 
 app.set('view engine', 'ejs');
 app.use(express.static('public'));
 app.use(express.urlencoded({ extended: true }));
 
-// ■ 重要な変更点: ファイル情報を保存するメモリ上のデータベース
-// 構造: { "123456": { url: "...", name: "...", expiry: ... } }
+// データ保存用（ { code: [file1, file2, ...] } の形式に変更）
 let fileDatabase = {};
 
-// 6桁のランダムな数字を生成する関数
 function generateCode() {
     let code;
     do {
         code = Math.floor(100000 + Math.random() * 900000).toString();
-    } while (fileDatabase[code]); // 重複チェック
+    } while (fileDatabase[code]);
     return code;
 }
 
-// トップページ（送信・受信画面）
+// 文字コード修正関数
+function fixFileName(name) {
+    try {
+        return Buffer.from(name, 'latin1').toString('utf8');
+    } catch (e) {
+        return name;
+    }
+}
+
 app.get('/', (req, res) => {
-    res.render('index', { generatedCode: null, error: null });
+    res.render('index', { generatedCode: null, error: null, fileCount: 0 });
 });
 
-// 送信（アップロード）処理
-app.post('/send', upload.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.render('index', { generatedCode: null, error: 'ファイルを選択してください' });
+// 送信処理（複数ファイル対応）
+// "files" はHTMLのinputタグのname属性です。最大20ファイルまで許可。
+app.post('/send', upload.array('files', 20), (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.render('index', { generatedCode: null, error: 'ファイルが選択されていません', fileCount: 0 });
     }
 
     const code = generateCode();
 
-    // 【修正1】文字化け対策：ファイル名をUTF-8に変換して直す
-    let originalName = req.file.originalname;
-    try {
-        // Latin1(ISO-8859-1)として誤認識されたものをバイナリに戻し、UTF-8として読み直す
-        originalName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
-    } catch (e) {
-        console.log("文字コード変換エラー:", e);
-    }
+    // アップロードされた全ファイルの情報を整形して保存
+    const filesData = req.files.map(file => ({
+        url: file.path,
+        name: fixFileName(file.originalname),
+        mimetype: file.mimetype
+    }));
 
-    // データベースに登録
     fileDatabase[code] = {
-        url: req.file.path,
-        name: originalName, // 修正済みの名前を保存
+        files: filesData,
         timer: setTimeout(() => {
             delete fileDatabase[code];
             console.log(`Code ${code} expired.`);
         }, 10 * 60 * 1000)
     };
 
-    // 修正済みの名前で画面に表示
-    res.render('index', { generatedCode: code, error: null, filename: originalName });
+    // 1つの場合と複数の場合でメッセージを変えるための情報
+    const displayFileName = filesData.length === 1 
+        ? filesData[0].name 
+        : `${filesData.length}個のファイル`;
+
+    res.render('index', { 
+        generatedCode: code, 
+        error: null, 
+        filename: displayFileName,
+        fileCount: filesData.length 
+    });
 });
 
-// 受信（ダウンロード）処理
-app.post('/receive', async (req, res) => { // ← async を追加！
+// 受信処理（ZIP圧縮対応）
+app.post('/receive', async (req, res) => {
     const code = req.body.code;
-    const fileData = fileDatabase[code];
+    const data = fileDatabase[code];
 
-    if (fileData) {
-        try {
-            // Cloudinaryからファイルデータを取得
+    if (!data) {
+        return res.render('index', { generatedCode: null, error: '無効なコード、または期限切れです。', fileCount: 0 });
+    }
+
+    try {
+        const files = data.files;
+
+        // 【ケース1】ファイルが1つだけの場合 -> そのままダウンロード
+        if (files.length === 1) {
+            const file = files[0];
             const response = await axios({
                 method: 'GET',
-                url: fileData.url,
-                responseType: 'stream' // ストリーム形式（データそのまま）で取得
+                url: file.url,
+                responseType: 'stream'
             });
 
-            // ブラウザに対して「これはダウンロードファイルですよ」と伝えるヘッダー設定
-            // 日本語ファイル名が正しく扱われる形式（RFC 5987）で指定
-            const encodedName = encodeURIComponent(fileData.name);
+            const encodedName = encodeURIComponent(file.name);
             res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodedName}`);
-            
-            // ファイルの種類（MIMEタイプ）を中継
             res.setHeader('Content-Type', response.headers['content-type']);
-
-            // データをユーザーへ流し込む
-            response.data.pipe(res);
-
-        } catch (error) {
-            console.error('Download error:', error);
-            res.render('index', { generatedCode: null, error: 'ファイルの取得に失敗しました。' });
+            return response.data.pipe(res);
         }
-    } else {
-        res.render('index', { generatedCode: null, error: '無効なコード、または期限切れです。' });
+
+        // 【ケース2】ファイルが複数の場合 -> ZIP圧縮してダウンロード
+        // ZIPファイル名を作成（例: y-share-123456.zip）
+        const zipName = `y-share-${code}.zip`;
+        res.setHeader('Content-Disposition', `attachment; filename=${zipName}`);
+        res.setHeader('Content-Type', 'application/zip');
+
+        // ZIP作成ライブラリのセットアップ
+        const archive = archiver('zip', { zlib: { level: 9 } });
+        
+        // エラーハンドリング
+        archive.on('error', (err) => { throw err; });
+        archive.pipe(res);
+
+        // 各ファイルをCloudinaryから取得してZIPに追加
+        for (const file of files) {
+            const response = await axios({
+                method: 'GET',
+                url: file.url,
+                responseType: 'stream'
+            });
+            // ZIP内にファイルを追加
+            archive.append(response.data, { name: file.name });
+        }
+
+        // 圧縮完了（これでダウンロードが終了する）
+        archive.finalize();
+
+    } catch (error) {
+        console.error('Download error:', error);
+        // ストリーム開始後にエラーが出た場合はヘッダー変更できないため、コンソール出力のみ
+        if (!res.headersSent) {
+             res.render('index', { generatedCode: null, error: 'ダウンロード中にエラーが発生しました。', fileCount: 0 });
+        }
     }
 });
 
